@@ -91,12 +91,12 @@ if __name__ == '__main__':
     output_types = params['output_types']
     stepsize = params['stepsize']
     clipsize = params['clipsize']
-    openexr_py2_path = params['openexr_py2_path']
+    # openexr_py2_path = params['openexr_py2_path']
     
     # check whether openexr_py2_path is loaded from configuration file
-    if 'openexr_py2_path' in locals() or 'openexr_py2_path' in globals():
-        for exr_path in openexr_py2_path.split(':'):
-            sys.path.insert(1, exr_path)
+    # if 'openexr_py2_path' in locals() or 'openexr_py2_path' in globals():
+    #     for exr_path in openexr_py2_path.split(':'):
+    #         sys.path.insert(1, exr_path)
 
     # to read exr imgs
     import OpenEXR 

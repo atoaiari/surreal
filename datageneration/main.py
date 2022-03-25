@@ -12,383 +12,20 @@ from glob import glob
 from random import choice
 from pickle import load
 from bpy_extras.object_utils import world_to_camera_view as world2cam
+import scipy.io
+
+# to read exr imgs
+import OpenEXR 
+import array
+import Imath
+
+import time
+
+from utils.utils import *
+
 
 sys.path.insert(0, ".")
 
-def mkdir_safe(directory):
-    try:
-        os.makedirs(directory)
-    except FileExistsError:
-        pass
-
-def setState0():
-    for ob in bpy.data.objects.values():
-        ob.select=False
-    bpy.context.scene.objects.active = None
-
-sorted_parts = ['hips','leftUpLeg','rightUpLeg','spine','leftLeg','rightLeg',
-                'spine1','leftFoot','rightFoot','spine2','leftToeBase','rightToeBase',
-                'neck','leftShoulder','rightShoulder','head','leftArm','rightArm',
-                'leftForeArm','rightForeArm','leftHand','rightHand','leftHandIndex1' ,'rightHandIndex1']
-# order
-part_match = {'root':'root', 'bone_00':'Pelvis', 'bone_01':'L_Hip', 'bone_02':'R_Hip',
-              'bone_03':'Spine1', 'bone_04':'L_Knee', 'bone_05':'R_Knee', 'bone_06':'Spine2',
-              'bone_07':'L_Ankle', 'bone_08':'R_Ankle', 'bone_09':'Spine3', 'bone_10':'L_Foot',
-              'bone_11':'R_Foot', 'bone_12':'Neck', 'bone_13':'L_Collar', 'bone_14':'R_Collar',
-              'bone_15':'Head', 'bone_16':'L_Shoulder', 'bone_17':'R_Shoulder', 'bone_18':'L_Elbow',
-              'bone_19':'R_Elbow', 'bone_20':'L_Wrist', 'bone_21':'R_Wrist', 'bone_22':'L_Hand', 'bone_23':'R_Hand'}
-
-part2num = {part:(ipart+1) for ipart,part in enumerate(sorted_parts)}
-
-# create one material per part as defined in a pickle with the segmentation
-# this is useful to render the segmentation in a material pass
-def create_segmentation(ob, params):
-    materials = {}
-    vgroups = {}
-    with open('pkl/segm_per_v_overlap.pkl', 'rb') as f:
-        vsegm = load(f)
-    bpy.ops.object.material_slot_remove()
-    parts = sorted(vsegm.keys())
-    for part in parts:
-        vs = vsegm[part]
-        vgroups[part] = ob.vertex_groups.new(part)
-        vgroups[part].add(vs, 1.0, 'ADD')
-        bpy.ops.object.vertex_group_set_active(group=part)
-        materials[part] = bpy.data.materials['Material'].copy()
-        materials[part].pass_index = part2num[part]
-        bpy.ops.object.material_slot_add()
-        ob.material_slots[-1].material = materials[part]
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='DESELECT')
-        bpy.ops.object.vertex_group_select()
-        bpy.ops.object.material_slot_assign()
-        bpy.ops.object.mode_set(mode='OBJECT')
-    return(materials)
-
-# create the different passes that we render
-def create_composite_nodes(tree, params, img=None, idx=0):
-    res_paths = {k:join(params['tmp_path'], '%05d_%s'%(idx, k)) for k in params['output_types'] if params['output_types'][k]}
-    
-    # clear default nodes
-    for n in tree.nodes:
-        tree.nodes.remove(n)
-
-    # create node for foreground image
-    layers = tree.nodes.new('CompositorNodeRLayers')
-    layers.location = -300, 400
-
-    # create node for background image
-    bg_im = tree.nodes.new('CompositorNodeImage')
-    bg_im.location = -300, 30
-    if img is not None:
-        bg_im.image = img
-
-    if(params['output_types']['vblur']):
-    # create node for computing vector blur (approximate motion blur)
-        vblur = tree.nodes.new('CompositorNodeVecBlur')
-        vblur.factor = params['vblur_factor']
-        vblur.location = 240, 400
-
-        # create node for saving output of vector blurred image 
-        vblur_out = tree.nodes.new('CompositorNodeOutputFile')
-        vblur_out.format.file_format = 'PNG'
-        vblur_out.base_path = res_paths['vblur']
-        vblur_out.location = 460, 460
-
-    # create node for mixing foreground and background images 
-    mix = tree.nodes.new('CompositorNodeMixRGB')
-    mix.location = 40, 30
-    mix.use_alpha = True
-
-    # create node for the final output 
-    composite_out = tree.nodes.new('CompositorNodeComposite')
-    composite_out.location = 240, 30
-
-    # create node for saving depth
-    if(params['output_types']['depth']):
-        depth_out = tree.nodes.new('CompositorNodeOutputFile')
-        depth_out.location = 40, 700
-        depth_out.format.file_format = 'OPEN_EXR'
-        depth_out.base_path = res_paths['depth']
-
-    # create node for saving normals
-    if(params['output_types']['normal']):
-        normal_out = tree.nodes.new('CompositorNodeOutputFile')
-        normal_out.location = 40, 600
-        normal_out.format.file_format = 'OPEN_EXR'
-        normal_out.base_path = res_paths['normal']
-
-    # create node for saving foreground image
-    if(params['output_types']['fg']):
-        fg_out = tree.nodes.new('CompositorNodeOutputFile')
-        fg_out.location = 170, 600
-        fg_out.format.file_format = 'PNG'
-        fg_out.base_path = res_paths['fg']
-
-    # create node for saving ground truth flow 
-    if(params['output_types']['gtflow']):
-        gtflow_out = tree.nodes.new('CompositorNodeOutputFile')
-        gtflow_out.location = 40, 500
-        gtflow_out.format.file_format = 'OPEN_EXR'
-        gtflow_out.base_path = res_paths['gtflow']
-
-    # create node for saving segmentation
-    if(params['output_types']['segm']):
-        segm_out = tree.nodes.new('CompositorNodeOutputFile')
-        segm_out.location = 40, 400
-        segm_out.format.file_format = 'OPEN_EXR'
-        segm_out.base_path = res_paths['segm']
-    
-    # merge fg and bg images
-    tree.links.new(bg_im.outputs[0], mix.inputs[1])
-    tree.links.new(layers.outputs['Image'], mix.inputs[2])
-    
-    if(params['output_types']['vblur']):
-        tree.links.new(mix.outputs[0], vblur.inputs[0])                # apply vector blur on the bg+fg image,
-        tree.links.new(layers.outputs['Z'], vblur.inputs[1])           #   using depth,
-        tree.links.new(layers.outputs['Speed'], vblur.inputs[2])       #   and flow.
-        tree.links.new(vblur.outputs[0], vblur_out.inputs[0])          # save vblurred output
-    
-    tree.links.new(mix.outputs[0], composite_out.inputs[0])            # bg+fg image
-    if(params['output_types']['fg']):
-        tree.links.new(layers.outputs['Image'], fg_out.inputs[0])      # save fg
-    if(params['output_types']['depth']):    
-        tree.links.new(layers.outputs['Z'], depth_out.inputs[0])       # save depth
-    if(params['output_types']['normal']):
-        tree.links.new(layers.outputs['Normal'], normal_out.inputs[0]) # save normal
-    if(params['output_types']['gtflow']):
-        tree.links.new(layers.outputs['Speed'], gtflow_out.inputs[0])  # save ground truth flow
-    if(params['output_types']['segm']):
-        tree.links.new(layers.outputs['IndexMA'], segm_out.inputs[0])  # save segmentation
-
-    return(res_paths)
-
-# creation of the spherical harmonics material, using an OSL script
-def create_sh_material(tree, sh_path, img=None):
-    # clear default nodes
-    for n in tree.nodes:
-        tree.nodes.remove(n)
-
-    uv = tree.nodes.new('ShaderNodeTexCoord')
-    uv.location = -800, 400
-
-    uv_xform = tree.nodes.new('ShaderNodeVectorMath')
-    uv_xform.location = -600, 400
-    uv_xform.inputs[1].default_value = (0, 0, 1)
-    uv_xform.operation = 'AVERAGE'
-
-    uv_im = tree.nodes.new('ShaderNodeTexImage')
-    uv_im.location = -400, 400
-    if img is not None:
-        uv_im.image = img
-
-    rgb = tree.nodes.new('ShaderNodeRGB')
-    rgb.location = -400, 200
-
-    script = tree.nodes.new('ShaderNodeScript')
-    script.location = -230, 400
-    script.mode = 'EXTERNAL'
-    script.filepath = sh_path #'spher_harm/sh.osl' #using the same file from multiple jobs causes white texture
-    script.update()
-
-    # the emission node makes it independent of the scene lighting
-    emission = tree.nodes.new('ShaderNodeEmission')
-    emission.location = -60, 400
-
-    mat_out = tree.nodes.new('ShaderNodeOutputMaterial')
-    mat_out.location = 110, 400
-    
-    tree.links.new(uv.outputs[2], uv_im.inputs[0])
-    tree.links.new(uv_im.outputs[0], script.inputs[0])
-    tree.links.new(script.outputs[0], emission.inputs[0])
-    tree.links.new(emission.outputs[0], mat_out.inputs[0])
-
-# computes rotation matrix through Rodrigues formula as in cv2.Rodrigues
-def Rodrigues(rotvec):
-    theta = np.linalg.norm(rotvec)
-    r = (rotvec/theta).reshape(3, 1) if theta > 0. else rotvec
-    cost = np.cos(theta)
-    mat = np.asarray([[0, -r[2], r[1]],
-                      [r[2], 0, -r[0]],
-                      [-r[1], r[0], 0]])
-    return(cost*np.eye(3) + (1-cost)*r.dot(r.T) + np.sin(theta)*mat)
-
-def init_scene(scene, params, gender='female'):
-    # load fbx model
-    bpy.ops.import_scene.fbx(filepath=join(params['smpl_data_folder'], 'basicModel_%s_lbs_10_207_0_v1.0.2.fbx' % gender[0]),
-                             axis_forward='Y', axis_up='Z', global_scale=100)
-    obname = '%s_avg' % gender[0] 
-    ob = bpy.data.objects[obname]
-    ob.data.use_auto_smooth = False  # autosmooth creates artifacts
-
-    # assign the existing spherical harmonics material
-    ob.active_material = bpy.data.materials['Material']
-
-    # delete the default cube (which held the material)
-    bpy.ops.object.select_all(action='DESELECT')
-    bpy.data.objects['Cube'].select = True
-    bpy.ops.object.delete(use_global=False)
-
-    # set camera properties and initial position
-    bpy.ops.object.select_all(action='DESELECT')
-    cam_ob = bpy.data.objects['Camera']
-    scn = bpy.context.scene
-    scn.objects.active = cam_ob
-
-    cam_ob.matrix_world = Matrix(((0., 0., 1, params['camera_distance']),
-                                 (0., -1, 0., -1.0),
-                                 (-1., 0., 0., 0.),
-                                 (0.0, 0.0, 0.0, 1.0)))
-    cam_ob.data.angle = math.radians(40)
-    cam_ob.data.lens =  60
-    cam_ob.data.clip_start = 0.1
-    cam_ob.data.sensor_width = 32
-
-    # setup an empty object in the center which will be the parent of the Camera
-    # this allows to easily rotate an object around the origin
-    scn.cycles.film_transparent = True
-    scn.render.layers["RenderLayer"].use_pass_vector = True
-    scn.render.layers["RenderLayer"].use_pass_normal = True
-    scene.render.layers['RenderLayer'].use_pass_emit  = True
-    scene.render.layers['RenderLayer'].use_pass_emit  = True
-    scene.render.layers['RenderLayer'].use_pass_material_index  = True
-
-    # set render size
-    scn.render.resolution_x = params['resy']
-    scn.render.resolution_y = params['resx']
-    scn.render.resolution_percentage = 100
-    scn.render.image_settings.file_format = 'PNG'
-
-    # clear existing animation data
-    ob.data.shape_keys.animation_data_clear()
-    arm_ob = bpy.data.objects['Armature']
-    arm_ob.animation_data_clear()
-
-    return(ob, obname, arm_ob, cam_ob)
-
-# transformation between pose and blendshapes
-def rodrigues2bshapes(pose):
-    rod_rots = np.asarray(pose).reshape(24, 3)
-    mat_rots = [Rodrigues(rod_rot) for rod_rot in rod_rots]
-    bshapes = np.concatenate([(mat_rot - np.eye(3)).ravel()
-                              for mat_rot in mat_rots[1:]])
-    return(mat_rots, bshapes)
-
-
-# apply trans pose and shape to character
-def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob, frame=None):
-    # transform pose into rotation matrices (for pose) and pose blendshapes
-    mrots, bsh = rodrigues2bshapes(pose)
-
-    # set the location of the first bone to the translation parameter
-    arm_ob.pose.bones[obname+'_Pelvis'].location = trans
-    if frame is not None:
-        arm_ob.pose.bones[obname+'_root'].keyframe_insert('location', frame=frame)
-    # set the pose of each bone to the quaternion specified by pose
-    for ibone, mrot in enumerate(mrots):
-        bone = arm_ob.pose.bones[obname+'_'+part_match['bone_%02d' % ibone]]
-        bone.rotation_quaternion = Matrix(mrot).to_quaternion()
-        if frame is not None:
-            bone.keyframe_insert('rotation_quaternion', frame=frame)
-            bone.keyframe_insert('location', frame=frame)
-
-    # apply pose blendshapes
-    for ibshape, bshape in enumerate(bsh):
-        ob.data.shape_keys.key_blocks['Pose%03d' % ibshape].value = bshape
-        if frame is not None:
-            ob.data.shape_keys.key_blocks['Pose%03d' % ibshape].keyframe_insert('value', index=-1, frame=frame)
-
-    # apply shape blendshapes
-    for ibshape, shape_elem in enumerate(shape):
-        ob.data.shape_keys.key_blocks['Shape%03d' % ibshape].value = shape_elem
-        if frame is not None:
-            ob.data.shape_keys.key_blocks['Shape%03d' % ibshape].keyframe_insert('value', index=-1, frame=frame)
-
-def get_bone_locs(obname, arm_ob, scene, cam_ob):
-    n_bones = 24
-    render_scale = scene.render.resolution_percentage / 100
-    render_size = (int(scene.render.resolution_x * render_scale),
-                   int(scene.render.resolution_y * render_scale))
-    bone_locations_2d = np.empty((n_bones, 2))
-    bone_locations_3d = np.empty((n_bones, 3), dtype='float32')
-
-    # obtain the coordinates of each bone head in image space
-    for ibone in range(n_bones):
-        bone = arm_ob.pose.bones[obname+'_'+part_match['bone_%02d' % ibone]]
-        co_2d = world2cam(scene, cam_ob, arm_ob.matrix_world * bone.head)
-        co_3d = arm_ob.matrix_world * bone.head
-        bone_locations_3d[ibone] = (co_3d.x,
-                                 co_3d.y,
-                                 co_3d.z)
-        bone_locations_2d[ibone] = (round(co_2d.x * render_size[0]),
-                                 round(co_2d.y * render_size[1]))
-    return(bone_locations_2d, bone_locations_3d)
-
-
-# reset the joint positions of the character according to its new shape
-def reset_joint_positions(orig_trans, shape, ob, arm_ob, obname, scene, cam_ob, reg_ivs, joint_reg):
-    # since the regression is sparse, only the relevant vertex
-    #     elements (joint_reg) and their indices (reg_ivs) are loaded
-    reg_vs = np.empty((len(reg_ivs), 3))  # empty array to hold vertices to regress from
-    # zero the pose and trans to obtain joint positions in zero pose
-    apply_trans_pose_shape(orig_trans, np.zeros(72), shape, ob, arm_ob, obname, scene, cam_ob)
-
-    # obtain a mesh after applying modifiers
-    bpy.ops.wm.memory_statistics()
-    # me holds the vertices after applying the shape blendshapes
-    me = ob.to_mesh(scene, True, 'PREVIEW')
-
-    # fill the regressor vertices matrix
-    for iiv, iv in enumerate(reg_ivs):
-        reg_vs[iiv] = me.vertices[iv].co
-    bpy.data.meshes.remove(me)
-
-    # regress joint positions in rest pose
-    joint_xyz = joint_reg.dot(reg_vs)
-    # adapt joint positions in rest pose
-    arm_ob.hide = False
-    bpy.ops.object.mode_set(mode='EDIT')
-    arm_ob.hide = True
-    for ibone in range(24):
-        bb = arm_ob.data.edit_bones[obname+'_'+part_match['bone_%02d' % ibone]]
-        bboffset = bb.tail - bb.head
-        bb.head = joint_xyz[ibone]
-        bb.tail = bb.head + bboffset
-    bpy.ops.object.mode_set(mode='OBJECT')
-    return(shape)
-
-# load poses and shapes
-def load_body_data(smpl_data, ob, obname, gender='female', idx=0):
-    # load MoSHed data from CMU Mocap (only the given idx is loaded)
-    
-    # create a dictionary with key the sequence name and values the pose and trans
-    cmu_keys = []
-    for seq in smpl_data.files:
-        if seq.startswith('pose_'):
-            cmu_keys.append(seq.replace('pose_', ''))
-    
-    name = sorted(cmu_keys)[idx % len(cmu_keys)]
-    
-    cmu_parms = {}
-    for seq in smpl_data.files:
-        if seq == ('pose_' + name):
-            cmu_parms[seq.replace('pose_', '')] = {'poses':smpl_data[seq],
-                                                   'trans':smpl_data[seq.replace('pose_','trans_')]}
-
-    # compute the number of shape blendshapes in the model
-    n_sh_bshapes = len([k for k in ob.data.shape_keys.key_blocks.keys()
-                        if k.startswith('Shape')])
-
-    # load all SMPL shapes
-    fshapes = smpl_data['%sshapes' % gender][:, :n_sh_bshapes]
-
-    return(cmu_parms, fshapes, name)
-
-import time
-start_time = None
-def log_message(message):
-    elapsed_time = time.time() - start_time
-    print("[%.2f s] %s" % (elapsed_time, message))
 
 def main():
     # time logging
@@ -679,7 +316,7 @@ def main():
     batch_it = 0
     curr_shape = reset_joint_positions(orig_trans, shape, ob, arm_ob, obname, scene,
                                        cam_ob, smpl_data['regression_verts'], smpl_data['joint_regressor'])
-    random_zrot = 2*np.pi*np.random.rand()
+    # random_zrot = 2*np.pi*np.random.rand()
     
     arm_ob.animation_data_clear()
     cam_ob.animation_data_clear()
@@ -694,6 +331,17 @@ def main():
         apply_trans_pose_shape(Vector(trans), pose, shape, ob, arm_ob, obname, scene, cam_ob, get_real_frame(seq_frame))
         dict_info['shape'][:, iframe] = shape[:ndofs]
         dict_info['pose'][:, iframe] = pose
+
+        # log_message("POSE")
+        # log_message(dict_info['pose'][0:3] * 180/np.pi)
+        # log_message(np.linalg.norm(dict_info['pose'][0:3])*180/np.pi)
+        # log_message(dict_info['pose'][0:3] / np.linalg.norm(dict_info['pose'][0:3]))
+        
+        # log_message("PELVIS")
+        # log_message(dict_info['pose'][3:6] * 180/np.pi)
+        # log_message(np.linalg.norm(dict_info['pose'][3:6])*180/np.pi)
+
+        
         dict_info['gender'][iframe] = list(genders)[list(genders.values()).index(gender)]
         if(output_types['vblur']):
             dict_info['vblur_factor'][iframe] = vblur_factor
@@ -814,13 +462,68 @@ def main():
         log_message("Generating fg video (%s)" % cmd_ffmpeg_fg)
         os.system(cmd_ffmpeg_fg)
    
-    cmd_tar = 'tar -czvf %s/%s.tar.gz -C %s %s' % (output_path, rgb_dirname, tmp_path, rgb_dirname)
-    log_message("Tarballing the images (%s)" % cmd_tar)
-    os.system(cmd_tar)
+    # cmd_tar = 'tar -czvf %s/%s.tar.gz -C %s %s' % (output_path, rgb_dirname, tmp_path, rgb_dirname)
+    # log_message("Tarballing the images (%s)" % cmd_tar)
+    # os.system(cmd_tar)
     
     # save annotation excluding png/exr data to _info.mat file
-    import scipy.io
     scipy.io.savemat(matfile_info, dict_info, do_compression=True)
+
+
+    #### PART 2 ####
+    log_message("Start part 2")
+    res_paths = {k:join(tmp_path, '%05d_%s'%(idx, k)) for k in output_types if output_types[k]}
+    
+    # .mat files
+    matfile_normal = join(output_path, name.replace(" ", "") + "_c%04d_normal.mat" % (ishape + 1))
+    matfile_gtflow = join(output_path, name.replace(" ", "") + "_c%04d_gtflow.mat" % (ishape + 1))
+    matfile_depth = join(output_path, name.replace(" ", "") + "_c%04d_depth.mat" % (ishape + 1))
+    matfile_segm = join(output_path, name.replace(" ", "") + "_c%04d_segm.mat" % (ishape + 1))
+    dict_normal = {}
+    dict_gtflow = {}
+    dict_depth = {}
+    dict_segm = {}
+    get_real_frame = lambda ifr: ifr
+    FLOAT = Imath.PixelType(Imath.PixelType.FLOAT)
+
+    # overlap determined by stride (# subsampled frames to skip)
+    fbegin = ishape*stepsize*stride
+    fend = min(ishape*stepsize*stride + stepsize*clipsize, len(data['poses']))
+    # LOOP OVER FRAMES
+    for seq_frame, (pose, trans) in enumerate(zip(data['poses'][fbegin:fend:stepsize], data['trans'][fbegin:fend:stepsize])):
+        iframe = seq_frame
+        
+        log_message("Processing frame %d" % iframe)
+        
+        for k, folder in res_paths.items():
+            if not k== 'vblur' and not k=='fg':
+                path = join(folder, 'Image%04d.exr' % get_real_frame(seq_frame))
+                exr_file = OpenEXR.InputFile(path)
+                if k == 'normal':
+                    mat = np.transpose(np.reshape([array.array('f', exr_file.channel(Chan, FLOAT)).tolist() for Chan in ("R", "G", "B")], (3, resx, resy)), (1, 2, 0))
+                    dict_normal['normal_%d' % (iframe + 1)] = mat.astype(np.float32, copy=False) # +1 for the 1-indexing
+                elif k == 'gtflow':
+                    mat = np.transpose(np.reshape([array.array('f', exr_file.channel(Chan, FLOAT)).tolist() for Chan in ("R", "G")], (2, resx, resy)), (1, 2, 0))
+                    dict_gtflow['gtflow_%d' % (iframe + 1)] = mat.astype(np.float32, copy=False)
+                elif k == 'depth':
+                    mat = np.reshape([array.array('f', exr_file.channel(Chan, FLOAT)).tolist() for Chan in ("R")], (resx, resy))
+                    dict_depth['depth_%d' % (iframe + 1)] = mat.astype(np.float32, copy=False)
+                elif k == 'segm':
+                    mat = np.reshape([array.array('f', exr_file.channel(Chan, FLOAT)).tolist() for Chan in ("R")], (resx, resy))
+                    dict_segm['segm_%d' % (iframe + 1)] = mat.astype(np.uint8, copy=False)
+
+    scipy.io.savemat(matfile_normal, dict_normal, do_compression=True)
+    scipy.io.savemat(matfile_gtflow, dict_gtflow, do_compression=True)
+    scipy.io.savemat(matfile_depth, dict_depth, do_compression=True)
+    scipy.io.savemat(matfile_segm, dict_segm, do_compression=True)
+
+    # cleaning up tmp
+    # if tmp_path != "" and tmp_path != "/":
+    #     log_message("Cleaning up tmp")
+    #     os.system('rm -rf %s' % tmp_path)
+
+    log_message("Completed batch")
+
 
 if __name__ == '__main__':
     main()
