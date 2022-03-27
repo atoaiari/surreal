@@ -1,3 +1,4 @@
+import string
 import sys
 import os
 import random
@@ -43,6 +44,10 @@ def main():
                         help='requested cut, according to the stride')
     parser.add_argument('--stride', type=int,
                         help='stride amount, default 50')
+    parser.add_argument('--gender', type=int,
+                        help='0: female - 1: male')
+    parser.add_argument('--bg_name',
+                        help='the filename of the background')
 
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:])
     
@@ -146,8 +151,12 @@ def main():
     os.system('cp spher_harm/sh.osl %s' % sh_dst)
 
     genders = {0: 'female', 1: 'male'}
-    # pick random gender
-    gender = choice(genders)
+    # set gender.
+    if args.gender == None:
+        gender = choice(genders)
+    else:
+        gender = genders.get(args.gender)
+    log_message("Gender: %s" % gender)
 
     scene = bpy.data.scenes['Scene']
     scene.render.engine = 'CYCLES'
@@ -178,9 +187,13 @@ def main():
     cloth_img_name = join(smpl_data_folder, cloth_img_name)
     cloth_img = bpy.data.images.load(cloth_img_name)
 
-    # random background
-    bg_img_name = choice(nh_txt_paths)[:-1]
+    # set background
+    if args.bg_name == None:
+        bg_img_name = choice(nh_txt_paths)[:-1]
+    else:
+        bg_img_name = os.path.join(bg_path, args.bg_name)
     bg_img = bpy.data.images.load(bg_img_name)
+    log_message("Background: %s" % bg_img)
 
     log_message("Loading parts segmentation")
     beta_stds = np.load(join(smpl_data_folder, ('%s_beta_stds.npy' % gender)))
