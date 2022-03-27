@@ -296,7 +296,7 @@ def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob
     # transform pose into rotation matrices (for pose) and pose blendshapes
     mrots, bsh = rodrigues2bshapes(pose)
     
-    log_message("ANGOLIIIIIIII")
+    log_message("ANGOLI")
     # log_message(Matrix(mrots[0]).to_euler("XYZ"))
     # log_message(Matrix(mrots[1]).to_euler("XYZ"))
     log_message("%.2f, %.2f, %.2f" % tuple(math.degrees(a) for a in Matrix(mrots[0]).to_euler("XYZ")))

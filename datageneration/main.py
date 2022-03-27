@@ -81,7 +81,7 @@ def main():
     log_message("use_split: %s" % idx_info['use_split'])
 
     # import configuration
-    log_message("Importing configuration")
+    #log_message("Importing configuration")
     import config
     params = config.load_file('config', 'SYNTH_DATA')
     
@@ -100,7 +100,7 @@ def main():
 
     # compute number of cuts
     nb_ishape = max(1, int(np.ceil((idx_info['nb_frames'] - (clipsize - stride))/stride)))
-    log_message("Max ishape: %d" % (nb_ishape - 1))
+    log_message("max ishape: %d" % (nb_ishape - 1))
     
     if ishape == None:
         exit(1)
@@ -133,7 +133,7 @@ def main():
     import hashlib
     s = "synth_data:%d:%d:%d" % (idx, runpass,ishape)
     seed_number = int(hashlib.sha1(s.encode('utf-8')).hexdigest(), 16) % (10 ** 8)
-    log_message("GENERATED SEED %d from string '%s'" % (seed_number, s))
+    #log_message("GENERATED SEED %d from string '%s'" % (seed_number, s))
     random.seed(seed_number)
     np.random.seed(seed_number)
     
@@ -141,7 +141,7 @@ def main():
         vblur_factor = np.random.normal(0.5, 0.5)
         params['vblur_factor'] = vblur_factor
     
-    log_message("Setup Blender")
+    #log_message("Setup Blender")
 
     # create copy-spher.harm. directory if not exists
     sh_dir = join(tmp_path, 'spher_harm')
@@ -156,7 +156,7 @@ def main():
         gender = choice(genders)
     else:
         gender = genders.get(args.gender)
-    log_message("Gender: %s" % gender)
+    log_message("gender: %s" % gender)
 
     scene = bpy.data.scenes['Scene']
     scene.render.engine = 'CYCLES'
@@ -164,7 +164,7 @@ def main():
     scene.cycles.shading_system = True
     scene.use_nodes = True
 
-    log_message("Listing background images")
+    #log_message("Listing background images")
     bg_names = join(bg_path, '%s_img.txt' % idx_info['use_split'])
     nh_txt_paths = []
     with open(bg_names) as f:
@@ -186,6 +186,7 @@ def main():
     cloth_img_name = choice(txt_paths)
     cloth_img_name = join(smpl_data_folder, cloth_img_name)
     cloth_img = bpy.data.images.load(cloth_img_name)
+    log_message("clothing texture: %s" % cloth_img_name)
 
     # set background
     if args.bg_name == None:
@@ -193,20 +194,20 @@ def main():
     else:
         bg_img_name = os.path.join(bg_path, args.bg_name)
     bg_img = bpy.data.images.load(bg_img_name)
-    log_message("Background: %s" % bg_img)
+    log_message("background: %s" % bg_img_name)
 
     log_message("Loading parts segmentation")
     beta_stds = np.load(join(smpl_data_folder, ('%s_beta_stds.npy' % gender)))
     
-    log_message("Building materials tree")
+    #log_message("Building materials tree")
     mat_tree = bpy.data.materials['Material'].node_tree
     create_sh_material(mat_tree, sh_dst, cloth_img)
     res_paths = create_composite_nodes(scene.node_tree, params, img=bg_img, idx=idx)
 
-    log_message("Loading smpl data")
+    #log_message("Loading smpl data")
     smpl_data = np.load(join(smpl_data_folder, smpl_data_filename))
     
-    log_message("Initializing scene")
+    #log_message("Initializing scene")
     camera_distance = np.random.normal(8.0, 1)
     params['camera_distance'] = camera_distance
     ob, obname, arm_ob, cam_ob = init_scene(scene, params, gender)
@@ -216,7 +217,7 @@ def main():
     bpy.context.scene.objects.active = ob
     segmented_materials = True #True: 0-24, False: expected to have 0-1 bg/fg
     
-    log_message("Creating materials segmentation")
+    #log_message("Creating materials segmentation")
     # create material segmentation
     if segmented_materials:
         materials = create_segmentation(ob, params)
@@ -240,7 +241,7 @@ def main():
         bpy.data.shape_keys["Key"].key_blocks[k].slider_min = -10
         bpy.data.shape_keys["Key"].key_blocks[k].slider_max = 10
 
-    log_message("Loading body data")
+    #log_message("Loading body data")
     cmu_parms, fshapes, name = load_body_data(smpl_data, ob, obname, idx=idx, gender=gender)
     
     log_message("Loaded body data for %s" % name)
@@ -286,7 +287,7 @@ def main():
     fbegin = ishape*stepsize*stride
     fend = min(ishape*stepsize*stride + stepsize*clipsize, len(data['poses']))
     
-    log_message("Computing how many frames to allocate")
+    #log_message("Computing how many frames to allocate")
     N = len(data['poses'][fbegin:fend:stepsize])
     log_message("Allocating %d frames in mat file" % N)
 
