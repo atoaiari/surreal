@@ -7,9 +7,9 @@ datageneration/config
 training/models/*.t7
 *~
 *.py[cod]
-__pycache__/
+pycache/
 *.oso
 out/
 tmp/
-blender/
+blender-2.78a-linux-glibc211-x86_64/
 .vscode/
