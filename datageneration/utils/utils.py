@@ -1,3 +1,5 @@
+from email.policy import default
+import string
 import sys
 import os
 import random
@@ -13,6 +15,7 @@ from random import choice
 from pickle import load
 from bpy_extras.object_utils import world_to_camera_view as world2cam
 import scipy.io
+import bmesh
 
 # to read exr imgs
 import OpenEXR 
@@ -20,6 +23,12 @@ import array
 import Imath
 
 import time
+import json
+import argparse
+import config
+
+from utils.utils import *
+
 start_time = time.time()
 
 
@@ -230,18 +239,22 @@ def Rodrigues(rotvec):
 
 def init_scene(scene, params, gender='female'):
     # load fbx model
+    controller = mute()
     bpy.ops.import_scene.fbx(filepath=join(params['smpl_data_folder'], 'basicModel_%s_lbs_10_207_0_v1.0.2.fbx' % gender[0]),
                              axis_forward='Y', axis_up='Z', global_scale=100)
+    unmute(controller)
+
     obname = '%s_avg' % gender[0] 
     ob = bpy.data.objects[obname]
     ob.data.use_auto_smooth = False  # autosmooth creates artifacts
 
     # assign the existing spherical harmonics material
     ob.active_material = bpy.data.materials['Material']
-
+    
     # delete the default cube (which held the material)
     bpy.ops.object.select_all(action='DESELECT')
-    bpy.data.objects['Cube'].select = True
+    if 'Cube' in bpy.data.objects:
+        bpy.data.objects['Cube'].select = True
     bpy.ops.object.delete(use_global=False)
 
     # set camera properties and initial position
@@ -292,17 +305,18 @@ def rodrigues2bshapes(pose):
 
 
 # apply trans pose and shape to character
-def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob, frame=None):
+def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob, frame=None, init_zrot=None):
     # transform pose into rotation matrices (for pose) and pose blendshapes
     mrots, bsh = rodrigues2bshapes(pose)
     
-    log_message("ANGOLI")
-    # log_message(Matrix(mrots[0]).to_euler("XYZ"))
-    # log_message(Matrix(mrots[1]).to_euler("XYZ"))
-    log_message("%.2f, %.2f, %.2f" % tuple(math.degrees(a) for a in Matrix(mrots[0]).to_euler("XYZ")))
-    log_message("%.2f, %.2f, %.2f" % tuple(math.degrees(a) for a in Matrix(mrots[1]).to_euler("XYZ")))
-
-
+    if init_zrot is not None and pose.any():
+        pelvis_mat = Matrix(mrots[0]).to_euler("XYZ")
+        # pelvis_mat.x = np.pi/2
+        pelvis_mat.y = 0
+        pelvis_mat.z = math.radians(init_zrot)
+        mrots[0] = np.array(pelvis_mat.to_matrix())
+        # log_message("ANGOLI %.2f, %.2f, %.2f" % tuple(math.degrees(a) for a in Matrix(mrots[0]).to_euler("XYZ")))
+    
     # set the location of the first bone to the translation parameter
     arm_ob.pose.bones[obname+'_Pelvis'].location = trans
     if frame is not None:
@@ -341,6 +355,7 @@ def get_bone_locs(obname, arm_ob, scene, cam_ob):
         bone = arm_ob.pose.bones[obname+'_'+part_match['bone_%02d' % ibone]]
         co_2d = world2cam(scene, cam_ob, arm_ob.matrix_world * bone.head)
         co_3d = arm_ob.matrix_world * bone.head
+        # print(bone.head)
         bone_locations_3d[ibone] = (co_3d.x,
                                  co_3d.y,
                                  co_3d.z)
@@ -358,7 +373,9 @@ def reset_joint_positions(orig_trans, shape, ob, arm_ob, obname, scene, cam_ob, 
     apply_trans_pose_shape(orig_trans, np.zeros(72), shape, ob, arm_ob, obname, scene, cam_ob)
 
     # obtain a mesh after applying modifiers
-    bpy.ops.wm.memory_statistics()
+    # controller = mute()
+    # bpy.ops.wm.memory_statistics()
+    # unmute(controller)
     # me holds the vertices after applying the shape blendshapes
     me = ob.to_mesh(scene, True, 'PREVIEW')
 
@@ -429,3 +446,136 @@ def load_body_data(smpl_data, ob, obname, gender='female', idx=0):
 #             cmu_parms[seq.replace('pose_', '')] = {'poses':smpl_data[seq],
 #                                                    'trans':smpl_data[seq.replace('pose_','trans_')]}
 #     return(cmu_parms, name)
+
+
+#### FROM SMPL_RELATIONS.PY ####
+
+# Returns intrinsic camera matrix
+# Parameters are hard-coded since all SURREAL images use the same.
+def get_intrinsic():
+    # These are set in Blender (datageneration/main_part1.py)
+    res_x_px = 320  # *scn.render.resolution_x
+    res_y_px = 240  # *scn.render.resolution_y
+    f_mm = 60  # *cam_ob.data.lens
+    sensor_w_mm = 32  # *cam_ob.data.sensor_width
+    sensor_h_mm = sensor_w_mm * res_y_px / res_x_px  # *cam_ob.data.sensor_height (function of others)
+
+    scale = 1  # *scn.render.resolution_percentage/100
+    skew = 0  # only use rectangular pixels
+    pixel_aspect_ratio = 1
+
+    # From similar triangles:
+    # sensor_width_in_mm / resolution_x_inx_pix = focal_length_x_in_mm / focal_length_x_in_pix
+    fx_px = f_mm * res_x_px * scale / sensor_w_mm
+    fy_px = f_mm * res_y_px * scale * pixel_aspect_ratio / sensor_h_mm
+
+    # Center of the image
+    u = res_x_px * scale / 2
+    v = res_y_px * scale / 2
+
+    # Intrinsic camera matrix
+    K = np.array([[fx_px, skew, u], [0, fy_px, v], [0, 0, 1]])
+    return K
+
+
+# Returns extrinsic camera matrix
+#   T : translation vector from Blender (*cam_ob.location)
+#   RT: extrinsic computer vision camera matrix
+#   Script based on https://blender.stackexchange.com/questions/38009/3x4-camera-matrix-from-blender-camera
+def get_extrinsic(T):
+    # Take the first 3 columns of the matrix_world in Blender and transpose.
+    # This is hard-coded since all images in SURREAL use the same.
+    R_world2bcam = np.array([[0, 0, 1], [0, -1, 0], [-1, 0, 0]]).transpose()
+    # *cam_ob.matrix_world = Matrix(((0., 0., 1, params['camera_distance']),
+    #                               (0., -1, 0., -1.0),
+    #                               (-1., 0., 0., 0.),
+    #                               (0.0, 0.0, 0.0, 1.0)))
+
+    # Convert camera location to translation vector used in coordinate changes
+    T_world2bcam = -1 * np.dot(R_world2bcam, T)
+
+    # Following is needed to convert Blender camera to computer vision camera
+    R_bcam2cv = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
+
+    # Build the coordinate transform matrix from world to computer vision camera
+    R_world2cv = np.dot(R_bcam2cv, R_world2bcam)
+    T_world2cv = np.dot(R_bcam2cv, T_world2bcam)
+
+    # Put into 3x4 matrixs
+    RT = np.concatenate([R_world2cv, T_world2cv[:,None]], axis=1)
+    return RT, R_world2cv, T_world2cv
+
+
+def project_vertices(points, intrinsic, extrinsic):
+    print(points.shape)
+    print(np.ones((points.shape[0], 1)).shape)
+    homo_coords = np.concatenate([points, np.ones((points.shape[0], 1))], axis=1).transpose()
+    proj_coords = np.dot(intrinsic, np.dot(extrinsic, homo_coords))
+    proj_coords = proj_coords / proj_coords[2]
+    proj_coords = proj_coords[:2].transpose()
+    return proj_coords
+
+
+def unit_vector(vector):
+    """ Returns the unit vector of the vector.  """
+    return vector / np.linalg.norm(vector)
+
+def compute_orientation(obname, arm_ob, scene, cam_ob):
+    # lshoulder = np.array(arm_ob.pose.bones[obname+'_'+part_match['bone_16']].head)
+    # rshoulder = np.array(arm_ob.pose.bones[obname+'_'+part_match['bone_17']].head)
+    # spine = np.array(arm_ob.pose.bones[obname+'_'+part_match['bone_09']].head)
+    # neck = (lshoulder + rshoulder)/2
+    lshoulder = np.array(arm_ob.pose.bones[obname+'_'+part_match['bone_16']].head * arm_ob.matrix_world)
+    rshoulder = np.array(arm_ob.pose.bones[obname+'_'+part_match['bone_17']].head * arm_ob.matrix_world)
+    spine = np.array(arm_ob.pose.bones[obname+'_'+part_match['bone_09']].head * arm_ob.matrix_world)
+    neck = (lshoulder + rshoulder)/2
+
+    T = unit_vector(neck - spine)
+    S = unit_vector(lshoulder - rshoulder)
+    C = np.cross(T, S)
+    # C[1] = 0
+    print(C)
+    orientation = math.degrees(np.arccos(np.clip(np.dot(unit_vector(C), unit_vector([0, 0, 1])), -1.0, 1.0)))
+    print("Orientation %f" %orientation)
+
+
+def reset_blend():
+    bpy.ops.wm.read_factory_settings()
+
+    for scene in bpy.data.scenes:
+        for obj in scene.objects:
+            scene.objects.unlink(obj)
+
+    # only worry about data in the startup scene
+    for bpy_data_iter in (
+            bpy.data.objects,
+            bpy.data.meshes,
+            bpy.data.lamps,
+            bpy.data.cameras,
+    ):
+        for id_data in bpy_data_iter:
+            bpy_data_iter.remove(id_data)
+
+def mute():
+    # disable render output
+    logfile = '/dev/null'
+    open(logfile, 'a').close()
+    old = os.dup(1)
+    sys.stdout.flush()
+    os.close(1)
+    os.open(logfile, os.O_WRONLY)
+    return old
+
+
+def unmute(old):
+    # disable output redirection
+    os.close(1)
+    os.dup(old)
+    os.close(old)
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)

@@ -13,3 +13,6 @@ out/
 tmp/
 blender-2.78a-linux-glibc211-x86_64/
 .vscode/
+tmp_detangle/
+detangle_dataset/
+get-pip.py

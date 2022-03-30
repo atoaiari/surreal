@@ -1,10 +1,6 @@
 #!/bin/bash
 
-JOB_PARAMS=${1:-'--idx 3 
-                 --ishape 0 
-                 --stride 50 
-                 --gender 0
-                 --bg_name light_green.jpg'}
+JOB_PARAMS=${1:-'--idx 3'}
 
 # SET PATHS HERE
 FFMPEG_PATH=/usr/bin/ffmpeg
@@ -19,4 +15,4 @@ export PYTHONPATH=${BUNDLED_PYTHON}/lib/python3.5:${BUNDLED_PYTHON}/lib/python3.
 export LD_LIBRARY_PATH=${FFMPEG_PATH}/lib:${X264_PATH}/lib:${LD_LIBRARY_PATH}
 export PATH=${FFMPEG_PATH}/bin:${PATH}
 
-$BLENDER_PATH/blender -b -t 8 -P main.py -- ${JOB_PARAMS}
+$BLENDER_PATH/blender -b -t 8 --verbose 0 -P main_detangle.py -- ${JOB_PARAMS}

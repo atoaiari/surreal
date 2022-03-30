@@ -1,0 +1,17 @@
+[SYNTH_DATA]
+tmp_path           = '/home/atoaiari/work/surreal/tmp_detangle'
+output_path        = '/home/atoaiari/work/surreal/detangle_dataset' # output folder
+bg_path            = '/home/atoaiari/work/surreal/background_images'
+
+output_types       = {'depth':False, 'fg':False, 'gtflow':False, 'normal':False, 'segm':False, 'vblur':False}
+
+smpl_data_folder   = 'smpl_data'
+smpl_data_filename = 'smpl_data.npz'
+clothing_option    = 'nongrey' # grey, nongrey or all
+
+resy     = 320  # width
+resx     = 240  # height
+stepsize = 4    # subsampling MoCap sequence by selecting every 4th frame
+
+
+

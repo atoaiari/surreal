@@ -14,6 +14,7 @@ from random import choice
 from pickle import load
 from bpy_extras.object_utils import world_to_camera_view as world2cam
 import scipy.io
+import bmesh
 
 # to read exr imgs
 import OpenEXR 
@@ -346,16 +347,11 @@ def main():
         dict_info['shape'][:, iframe] = shape[:ndofs]
         dict_info['pose'][:, iframe] = pose
 
-        # log_message("POSE")
-        # log_message(dict_info['pose'][0:3] * 180/np.pi)
-        # log_message(np.linalg.norm(dict_info['pose'][0:3])*180/np.pi)
-        # log_message(dict_info['pose'][0:3] / np.linalg.norm(dict_info['pose'][0:3]))
-        
-        # log_message("PELVIS")
-        # log_message(dict_info['pose'][3:6] * 180/np.pi)
-        # log_message(np.linalg.norm(dict_info['pose'][3:6])*180/np.pi)
+        axisy = arm_ob.matrix_world * Vector([0,1,0])
+        print(axisy)
 
-        
+        print(compute_orientation(obname, arm_ob, scene, cam_ob))
+
         dict_info['gender'][iframe] = list(genders)[list(genders.values()).index(gender)]
         if(output_types['vblur']):
             dict_info['vblur_factor'][iframe] = vblur_factor
@@ -411,6 +407,21 @@ def main():
         os.close(1)
         os.open(logfile, os.O_WRONLY)
 
+        mesh = bpy.data.meshes.new('Basic_Sphere')
+        basic_sphere = bpy.data.objects.new("Basic_Sphere", mesh)
+        # Add the object into the scene.
+        bpy.context.scene.objects.link(basic_sphere)
+        bpy.context.scene.objects.active = basic_sphere
+        basic_sphere.select = True
+        # Construct the bmesh sphere and assign it to the blender mesh.
+        bm = bmesh.new()
+        bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=16, diameter=0.4)
+        bmesh.ops.transform(bm, matrix=Matrix.Translation((0, 0, 1)), verts=bm.verts)
+        bm.to_mesh(mesh)
+        bm.free()
+        bpy.ops.object.modifier_add(type='SUBSURF')
+        bpy.ops.object.shade_smooth()
+
         # Render
         bpy.ops.render.render(write_still=True)
 
@@ -457,6 +468,10 @@ def main():
 
         reset_loc = (bone_locs_2D.max(axis=-1) > 256).any() or (bone_locs_2D.min(axis=0) < 0).any()
         arm_ob.pose.bones[obname+'_root'].rotation_quaternion = Quaternion((1, 0, 0, 0))
+
+        # log_message("POSE 3D")
+        log_message(np.hstack((dict_info['joints3D'][0], dict_info['joints3D'][1], dict_info['joints3D'][2])))
+        # log_message(bone_locs_3D)
 
     # save a .blend file for debugging:
     # bpy.ops.wm.save_as_mainfile(filepath=join(tmp_path, 'pre.blend'))
