@@ -312,8 +312,8 @@ def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob
     if init_zrot is not None and pose.any():
         pelvis_mat = Matrix(mrots[0]).to_euler("XYZ")
         # pelvis_mat.x = np.pi/2
-        pelvis_mat.y = 0
-        pelvis_mat.z = math.radians(init_zrot)
+        pelvis_mat.z = 0
+        pelvis_mat.y = math.radians(init_zrot)
         mrots[0] = np.array(pelvis_mat.to_matrix())
         # log_message("ANGOLI %.2f, %.2f, %.2f" % tuple(math.degrees(a) for a in Matrix(mrots[0]).to_euler("XYZ")))
     

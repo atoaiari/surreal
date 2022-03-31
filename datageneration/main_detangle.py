@@ -37,11 +37,11 @@ def main():
     parser = argparse.ArgumentParser(description='Generate synth dataset images for disentanglement.')
     parser.add_argument('--idx', type=int,
                         help='idx of the requested sequence')
-    parser.add_argument('--frames', type=int, help='frames to use from the sequence', default=2)
+    parser.add_argument('--frames', type=int, help='frames to use from the sequence', default=5)
     parser.add_argument('--gender', type=int,
                         help='-1: both, 0: female, 1: male', default=-1)
     parser.add_argument('--backgrounds', type=int,
-                        help='number of backgrounds', default=3)
+                        help='number of backgrounds', default=10)
     parser.add_argument('--orientations', type=int, choices=[4, 8, 16], default=4,
                         help='number of orientation classes')
 
@@ -89,11 +89,13 @@ def main():
     
     # name is set given idx
     name = idx_info['name']
+    info_files_path = join(output_path, "info")
+    params['info_files_path'] = info_files_path
     output_path = join(output_path, '%s' % name.replace(" ", ""))
     params['output_path'] = output_path
     tmp_path = join(tmp_path, '%s' % (name.replace(" ", "")))
     params['tmp_path'] = tmp_path
-    
+
     # check if already computed
     #  + clean up existing tmp folders if any
     if exists(tmp_path) and tmp_path != "" and tmp_path != "/":
@@ -102,6 +104,9 @@ def main():
     if exists(output_path) and output_path != "" and output_path != "/":
         os.system('rm -rf %s' % output_path)
     
+    if not exists(info_files_path):
+        mkdir_safe(info_files_path)
+
     # create tmp directory
     if not exists(tmp_path):
         mkdir_safe(tmp_path)
@@ -110,13 +115,13 @@ def main():
     if not exists(output_path):
         mkdir_safe(output_path)
 
-    
     # >> don't use random generator before this point <<
 
     # initialize RNG with seeds from sequence id
     import hashlib
     s = "synth_data:%d:%d" % (idx, runpass)
-    seed_number = int(hashlib.sha1(s.encode('utf-8')).hexdigest(), 16) % (10 ** 8)
+    # seed_number = int(hashlib.sha1(s.encode('utf-8')).hexdigest(), 16) % (10 ** 8)
+    seed_number = 11
     #log_message("GENERATED SEED %d from string '%s'" % (seed_number, s))
     random.seed(seed_number)
     np.random.seed(seed_number)
@@ -155,23 +160,25 @@ def main():
     frames.append(0)
     frames.sort()
 
+    camera_distance = np.random.normal(8.0, 1)
+
     img_ct = 0
     for gndr in gender:
         # grab clothing names
         log_message("clothing: %s" % clothing_option)
-        if img_ct == 0:
-            with open(join(smpl_data_folder, 'textures', '%s_%s.txt' % (gndr, idx_info['use_split']))) as f:
-                txt_paths = f.read().splitlines()
+        
+        with open(join(smpl_data_folder, 'textures', '%s_%s.txt' % (gndr, idx_info['use_split']))) as f:
+            txt_paths = f.read().splitlines()
 
-            # if using only one source of clothing
-            if clothing_option == 'nongrey':
-                txt_paths = [k for k in txt_paths if 'nongrey' in k]
-            elif clothing_option == 'grey':
-                txt_paths = [k for k in txt_paths if 'nongrey' not in k]
-            
-            # random clothing texture
-            cloth_img_name = choice(txt_paths)
-            cloth_img_name = join(smpl_data_folder, cloth_img_name)
+        # if using only one source of clothing
+        if clothing_option == 'nongrey':
+            txt_paths = [k for k in txt_paths if 'nongrey' in k]
+        elif clothing_option == 'grey':
+            txt_paths = [k for k in txt_paths if 'nongrey' not in k]
+        
+        # random clothing texture
+        cloth_img_name = choice(txt_paths)
+        cloth_img_name = join(smpl_data_folder, cloth_img_name)
 
         ### BLENDER ###
         scene = bpy.data.scenes['Scene']
@@ -191,9 +198,7 @@ def main():
         smpl_data = np.load(join(smpl_data_folder, smpl_data_filename))
         
         #log_message("Initializing scene")
-        if img_ct == 0:
-            camera_distance = np.random.normal(8.0, 1)
-            params['camera_distance'] = camera_distance
+        params['camera_distance'] = camera_distance
 
         ob, obname, arm_ob, cam_ob = init_scene(scene, params, gndr)
 
@@ -231,16 +236,15 @@ def main():
         
         log_message("Loaded body data for %s" % name)
         
-        if img_ct == 0:
-            nb_fshapes = len(fshapes)
-            if idx_info['use_split'] == 'train':
-                fshapes = fshapes[:int(nb_fshapes*0.8)]
-            elif idx_info['use_split'] == 'test':
-                fshapes = fshapes[int(nb_fshapes*0.8):]
-            
-            # pick random real body shape
-            shape = choice(fshapes) #+random_shape(.5) can add noise
-            ndofs = 10
+        nb_fshapes = len(fshapes)
+        if idx_info['use_split'] == 'train':
+            fshapes = fshapes[:int(nb_fshapes*0.8)]
+        elif idx_info['use_split'] == 'test':
+            fshapes = fshapes[int(nb_fshapes*0.8):]
+        
+        # pick random real body shape
+        shape = choice(fshapes) #+random_shape(.5) can add noise
+        ndofs = 10
 
         scene.objects.active = arm_ob
         orig_trans = np.asarray(arm_ob.pose.bones[obname+'_Pelvis'].location).copy()
@@ -253,12 +257,8 @@ def main():
             scs[-1].update()
 
         data = cmu_parms[name]
-        
-        # log_message("Computing how many frames to allocate")
-        N = n_frames
-        log_message("Allocating %d frames in mat file" % N)
 
-        jsonfile_info = join(output_path, name.replace(" ", "") + "_info.json")
+        jsonfile_info = join(info_files_path, "%04d-"%idx + name.replace(" ", "") + "-info.json")
         log_message('Working on %s' % jsonfile_info)
 
         # for each clipsize'th frame in the sequence
@@ -287,17 +287,7 @@ def main():
         # create a keyframe animation with pose, translation, blendshapes and camera motion
         # LOOP TO CREATE 3D ANIMATION
         for orientation in orientations:
-            for background in backgrounds:
-                dict_info = {}
-                dict_info['sequence'] = name.replace(" ", "")
-                dict_info['camDist'] = camera_distance
-                if name.replace(" ", "").startswith('h36m'):
-                    dict_info['source'] = 'h36m'
-                else:
-                    dict_info['source'] = 'cmu'
-                
-                dict_info_array = [dict_info for i in range(n_frames)]
-
+            for background in backgrounds:        
                 bg_img = bpy.data.images.load(background)
                 res_paths = create_composite_nodes(scene.node_tree, params, img=bg_img, idx=idx)
                 
@@ -305,15 +295,27 @@ def main():
                 translations = np.tile(data['trans'][0], (n_frames, 1))
                 for iframe, (seq_frame, pose, trans) in enumerate(zip(frames, data['poses'][frames], translations)):
                     scene.frame_set(get_real_frame(seq_frame))
-
+            
                     # apply the translation, pose and shape to the character
                     apply_trans_pose_shape(Vector(trans), pose, shape, ob, arm_ob, obname, scene, cam_ob, get_real_frame(seq_frame), orientation)
                     
-                    dict_info_array[iframe]['shape'] = shape[:ndofs]
-                    dict_info_array[iframe]['pose'] = pose
-                    dict_info_array[iframe]['gender'] = list(genders)[list(genders.values()).index(gndr)]
-                    dict_info_array[iframe]['zrot'] = random_zrot
+                    dict_info = {}
+                    dict_info['img_idx'] = img_ct
+                    dict_info['frame'] = int(get_real_frame(seq_frame))
+                    dict_info['index'] = idx
+                    dict_info['sequence'] = name.replace(" ", "")
+                    dict_info['camDist'] = camera_distance
+                    if name.replace(" ", "").startswith('h36m'):
+                        dict_info['source'] = 'h36m'
+                    else:
+                        dict_info['source'] = 'cmu'
 
+                    dict_info['shape'] = shape[:ndofs]
+                    dict_info['pose'] = pose
+                    dict_info['gender'] = gndr
+                    dict_info['zrot'] = random_zrot
+                    dict_info['orientation'] = orientation
+        
                     arm_ob.pose.bones[obname+'_root'].rotation_quaternion = Quaternion(Euler((0, 0, random_zrot), 'XYZ'))
                     arm_ob.pose.bones[obname+'_root'].keyframe_insert('rotation_quaternion', frame=get_real_frame(seq_frame))
                     scene.update()
@@ -324,21 +326,21 @@ def main():
                         new_pelvis_loc = arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()
                         cam_ob.location = orig_cam_loc.copy() + (new_pelvis_loc.copy() - orig_pelvis_loc.copy())
                         cam_ob.keyframe_insert('location', frame=get_real_frame(seq_frame))
-                        dict_info_array[iframe]['camLoc'] = np.array(cam_ob.location)
+                        dict_info['camLoc'] = np.array(cam_ob.location)
 
                     scene.node_tree.nodes['Image'].image = bg_img
 
                     # iterate over the keyframes and render
                     # LOOP TO RENDER
-                    dict_info_array[iframe]['bg'] = background
-                    dict_info_array[iframe]['cloth'] = cloth_img_name
-                    dict_info_array[iframe]['light'] = sh_coeffs
+                    dict_info['bg'] = os.path.splitext(os.path.basename(background))[0]
+                    dict_info['cloth'] = cloth_img_name
+                    dict_info['light'] = sh_coeffs
 
                     scene.render.use_antialiasing = False
-                    scene.render.filepath = join(output_path, '%02d_%s_%s_%d.png' % (get_real_frame(seq_frame), gndr, os.path.splitext(os.path.basename(background))[0], orientation))
-                    dict_info_array[iframe]['img_path'] = '%02d_%s_%s_%d.png' % (get_real_frame(seq_frame), gndr, os.path.splitext(os.path.basename(background))[0], orientation)
+                    dict_info['img_path'] = '%04d-%s-%04d-%s-%s-%d.png' % (img_ct, name.replace(" ", ""), get_real_frame(seq_frame), gndr, os.path.splitext(os.path.basename(background))[0], orientation)
+                    scene.render.filepath = join(output_path, dict_info['img_path'])
 
-                    log_message("Rendering image %d: frame %d with: gender %s, background %s, orientation %d" % (img_ct, seq_frame, gndr, os.path.basename(background), orientation))
+                    log_message("Rendering image %d: frame %d with: gender %s, background %s, orientation %d" % (img_ct, seq_frame, gndr, os.path.splitext(os.path.basename(background))[0], orientation))
         
                     controller = mute()
                     # Render
@@ -347,15 +349,14 @@ def main():
 
                     # bone locations should be saved after rendering so that the bones are updated
                     bone_locs_2D, bone_locs_3D = get_bone_locs(obname, arm_ob, scene, cam_ob)
-                    dict_info_array[iframe]['joints2D'] = np.transpose(bone_locs_2D)
-                    dict_info_array[iframe]['joints3D'] = np.transpose(bone_locs_3D)
+                    dict_info['joints2D'] = np.transpose(bone_locs_2D)
+                    dict_info['joints3D'] = np.transpose(bone_locs_3D)
 
                     reset_loc = (bone_locs_2D.max(axis=-1) > 256).any() or (bone_locs_2D.min(axis=0) < 0).any()
                     arm_ob.pose.bones[obname+'_root'].rotation_quaternion = Quaternion((1, 0, 0, 0))
 
                     img_ct += 1
-
-        sequence_info.extend(dict_info_array)
+                    sequence_info.append(dict_info)
 
         bpy.ops.wm.read_homefile()
         log_message("Completed batch")
