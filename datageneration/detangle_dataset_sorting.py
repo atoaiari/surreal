@@ -3,6 +3,8 @@ import numpy as np
 import json
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import argparse
+from datetime import datetime
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -12,12 +14,8 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def main():
-    dataset_dir = "detangle_dataset/"
-    info_dir = os.path.join(dataset_dir, "info")
-    factors = ["pose_id", "gender", "orientation", "bg"]
-    tt_split = 0.1
-
+def detangle_dataset_sorting(dataset_path, factors, tt_plit):
+    info_dir = os.path.join(dataset_path, "info")
     info_files = os.listdir(info_dir)
     
     dfs = []
@@ -36,8 +34,10 @@ def main():
     print(f"Factor Sizes: {factor_sizes}")
     print(f"Factor Bases: {factor_bases}")
     print(f"Tot imgs: {df.shape[0]}")
+
     info_dict = df.to_dict('records')
-    with open(os.path.join(dataset_dir, f"detangle_surreal.json"), 'w', encoding='utf-8') as f:
+    info_dict = {"created": datetime.now().strftime("%d-%m-%Y-%H-%M"), "factors": factors, "factor_bases": factor_bases, "factor_sizes": factor_sizes, "data": info_dict}
+    with open(os.path.join(dataset_path, f"detangle_surreal.json"), 'w', encoding='utf-8') as f:
         json.dump(info_dict, f, ensure_ascii=False, indent=4, cls=NumpyEncoder)
 
     # dataset = {}
@@ -57,6 +57,11 @@ def main():
     print("Done!")
     
 
-
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset_path", type=str, help="path to the dataset")
+    parser.add_argument("--factors", type=str, nargs="+", default=["pose_id", "gender", "orientation", "bg"], help="sorted list of factors to consider")
+    parser.add_argument("--split", type=float, default=0, help="train-test split")
+    args = parser.parse_args()
+
+    detangle_dataset_sorting(args.dataset_path, args.factors, args.split)

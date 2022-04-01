@@ -16,3 +16,4 @@ blender-2.78a-linux-glibc211-x86_64/
 tmp_detangle/
 detangle_dataset/
 get-pip.py
+surreal_detangle_dataset*

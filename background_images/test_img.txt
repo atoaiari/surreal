@@ -1,0 +1,15 @@
+bordeaux.jpg
+dark_green.jpg
+light_pink.jpg
+red.jpg
+brown.jpg
+dark_pink.jpg
+light_blue.jpg
+light_purple.jpg
+white.jpg
+dark_blue.jpg
+dark_purple.jpg
+light_green.jpg
+orange.jpg
+yellow.jpg
+

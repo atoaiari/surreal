@@ -1,6 +1,6 @@
 #!/bin/bash
 
-JOB_PARAMS=${1:-'--idx 6'}
+JOB_PARAMS=${1:-'--idx 0'}
 
 # SET PATHS HERE
 FFMPEG_PATH=/usr/bin/ffmpeg

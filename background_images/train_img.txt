@@ -1,6 +1,5 @@
 bordeaux.jpg
 dark_green.jpg
-grey.jpg
 light_pink.jpg
 red.jpg
 brown.jpg
