@@ -1,7 +1,7 @@
 [SYNTH_DATA]
 tmp_path           = '/home/atoaiari/work/surreal/tmp_detangle'
-output_path        = '/home/atoaiari/work/surreal/surreal_detangle_dataset_25_5_16_10_5' # output folder
-bg_path            = '/home/atoaiari/work/surreal/background_images'
+output_path        = '/home/atoaiari/work/surreal/surreal_detangle_dataset_def' # output folder
+bg_path            = '/home/atoaiari/work/surreal/shapes3D_backgrounds'
 
 output_types       = {'depth':False, 'fg':False, 'gtflow':False, 'normal':False, 'segm':False, 'vblur':False}
 

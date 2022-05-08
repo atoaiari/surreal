@@ -79,7 +79,7 @@ if __name__ == '__main__':
     np.random.seed(seed_number)
     
     # import configuration
-    import config
+    import configs.config as config
     params = config.load_file('config', 'SYNTH_DATA')
     
     smpl_data_folder = params['smpl_data_folder']

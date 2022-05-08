@@ -5,54 +5,65 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 import argparse
 from datetime import datetime
+from collections import OrderedDict
+import itertools
+
+from utils.utils import *
 
 
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return json.JSONEncoder.default(self, obj)
-
-
-def detangle_dataset_sorting(dataset_path, factors, tt_plit):
+def detangle_dataset_sorting(dataset_path, factors_dict, tt_split):
     info_dir = os.path.join(dataset_path, "info")
     info_files = os.listdir(info_dir)
-    
+
     dfs = []
     for file in info_files:
+        print(file)
         with open(os.path.join(info_dir, file)) as f:
             json_data = pd.json_normalize(json.loads(f.read()))
         dfs.append(json_data)
     df = pd.concat(dfs, sort=False)
 
+    with open(factors_dict, "r") as f:
+        factors = json.load(f, object_pairs_hook=OrderedDict)
+    factor_keys = list(factors.keys())
+
     df["pose_id"] = df["index"].astype(str).str.zfill(4) + "-" + df["frame"].astype(str).str.zfill(5)
     df.drop(columns=["camDist", "shape", "pose", "joints2D", "joints3D", "light", "zrot", "camLoc", "index", "frame", "img_idx", "cloth"], inplace=True)
     
-    df.sort_values(by=factors, ignore_index=True, inplace=True)
-    factor_sizes = [len(df[factor].unique()) for factor in factors]
+    for key, value in factors.items():
+        if key in df.columns and value > 0:
+            if key == "orientation":
+                assert value in [4, 8, 16]
+                orientations = np.arange(0, 360, (360/value))
+                df = df[df[key].isin(orientations)]
+            else:
+                possible_values = df[key].unique()
+                df = df[df[key].isin(possible_values[:value])]
+
+    df.sort_values(by=factor_keys, ignore_index=True, inplace=True)
+    factor_sizes = [len(df[factor].unique()) for factor in factor_keys]
     factor_bases = np.prod(factor_sizes) / np.cumprod(factor_sizes)
     print(f"Factor Sizes: {factor_sizes}")
     print(f"Factor Bases: {factor_bases}")
     print(f"Tot imgs: {df.shape[0]}")
 
-    info_dict = df.to_dict('records')
-    info_dict = {"created": datetime.now().strftime("%d-%m-%Y-%H-%M"), "factors": factors, "factor_bases": factor_bases, "factor_sizes": factor_sizes, "data": info_dict}
-    with open(os.path.join(dataset_path, f"detangle_surreal.json"), 'w', encoding='utf-8') as f:
-        json.dump(info_dict, f, ensure_ascii=False, indent=4, cls=NumpyEncoder)
+    info_dict = {
+        "created": datetime.now().strftime("%d-%m-%Y-%H-%M"), 
+        "factors": factor_keys, 
+        "factor_bases": factor_bases, 
+        "factor_sizes": factor_sizes, 
+        "n_samples": df.shape[0], 
+        "images": df.to_dict('records'),
+        "features": [list(i) for i in itertools.product(*[range(x) for x in factor_sizes])]}
 
-    # dataset = {}
-    # dataset["train"], dataset["test"] = train_test_split(df, test_size=tt_split)
-    # for split_type in ["train", "test"]:
-    #     dataset[split_type].sort_values(by=factors, ignore_index=True, inplace=True)
-    #     print(f"Dataset {split_type}")
-    #     factor_sizes = [len(dataset[split_type][factor].unique()) for factor in factors]
-    #     factor_bases = np.prod(factor_sizes) / np.cumprod(factor_sizes)
-    #     print(f"Factor Sizes: {factor_sizes}")
-    #     print(f"Factor Bases: {factor_bases}")
-    #     print(f"Tot imgs: {dataset[split_type].shape[0]}")
-    #     info_dict = dataset[split_type].to_dict('records')
-    #     with open(os.path.join(dataset_dir, f"detangle_surreal_{split_type}.json"), 'w', encoding='utf-8') as f:
-    #         json.dump(info_dict, f, ensure_ascii=False, indent=4, cls=NumpyEncoder)
+    output_file = "detangle_surreal"
+    for key, value in factors.items():
+        output_file += f"_{key.split('_')[0]}-{len(df[key].unique())}"
+    output_file += ".json"
+
+    os.makedirs(os.path.join(dataset_path, "dataset"), exist_ok=True)
+    with open(os.path.join(dataset_path, "dataset", output_file), 'w', encoding='utf-8') as f:
+        json.dump(info_dict, f, ensure_ascii=False, indent=4, cls=NumpyEncoder)
 
     print("Done!")
     
@@ -60,7 +71,8 @@ def detangle_dataset_sorting(dataset_path, factors, tt_plit):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", type=str, help="path to the dataset")
-    parser.add_argument("--factors", type=str, nargs="+", default=["pose_id", "gender", "orientation", "bg"], help="sorted list of factors to consider")
+    # parser.add_argument("--factors", type=str, nargs="+", default=["pose_id", "gender", "orientation", "bg", "shape_idx"], help="sorted list of factors to consider")
+    parser.add_argument("--factors", type=str, default="configs/surreal_factors.json", help="path to the json containing the list of factors")
     parser.add_argument("--split", type=float, default=0, help="train-test split")
     args = parser.parse_args()
 
